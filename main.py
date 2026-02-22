@@ -1,6 +1,5 @@
 from datetime import date
-
-current_date = date.today()
+from dateutil.relativedelta import relativedelta
 
 # 1. Bond Parameter Input
 
@@ -9,7 +8,7 @@ face_value = 100
 while True:
     while True:
         try:
-            price_input = input("Enter today's Market Price: ")
+            price_input = input("(1/6) Enter Settlement Price (incl. accr. interest): ")
             price = float(price_input)
 
             if price <= 0:
@@ -22,10 +21,20 @@ while True:
 
     while True:
         try:
-            issue_input = input("Enter Issue Date (YYYY-MM-DD): ")
+            settlement_input = input("(2/6) Enter Settlement Date (YYYY-MM-DD): ")
+            settlement_date = date.fromisoformat(settlement_input)
+
+            break
+
+        except ValueError:
+            print("Error: Invalid input")
+
+    while True:
+        try:
+            issue_input = input("(3/6) Enter Issue Date (YYYY-MM-DD): ")
             issue_date = date.fromisoformat(issue_input)
 
-            if issue_date > current_date:
+            if issue_date > settlement_date:
                 print("Error: Issue date must be in the past")
                 continue
             break
@@ -35,10 +44,10 @@ while True:
 
     while True:
         try:
-            maturity_input = input("Enter Maturity Date (YYYY-MM-DD): ")
+            maturity_input = input("(4/6) Enter Maturity Date (YYYY-MM-DD): ")
             maturity_date = date.fromisoformat(maturity_input)
 
-            if maturity_date < current_date:
+            if maturity_date < settlement_date:
                 print("Error: Maturity date must be in the future")
                 continue
             break
@@ -48,7 +57,7 @@ while True:
 
     while True:
         try:
-            coupon_input = input("Enter Coupon Rate (%): ")
+            coupon_input = input("(5/6) Enter Coupon Rate (%): ")
             coupon_rate = float(coupon_input) / 100
 
             if coupon_rate < 0:
@@ -61,7 +70,7 @@ while True:
 
     while True:
         try:
-            frequency_input = input("Enter Annual Coupon Frequency (1, 2, 4, or 12): ")
+            frequency_input = input("(6/6) Enter Annual Coupon Frequency (1, 2, 4, or 12): ")
             frequency = int(frequency_input)
 
             if frequency not in [1, 2, 4, 12]:
@@ -73,89 +82,100 @@ while True:
             print("Error: Invalid input")
 
 
-# 2. Cash Flow Reconstruction
+# 2. Cash Flow Reconstruction (Dates and Amounts)
 
-    # Find the number of days from issuance until maturity
-    maturity_days = (maturity_date - issue_date).days
+    # Calculate exactly how many months make up one coupon period
+    months_per_period = int(12 / frequency)
+    
+    cash_flow_dates = []
+    settlement_date_iter = maturity_date
+    
+    # Walk backward from maturity to find exact calendar dates of all coupons
+    while settlement_date_iter > issue_date:
+        cash_flow_dates.append(settlement_date_iter)
+        settlement_date_iter -= relativedelta(months=months_per_period)
+    
+    # Reverse the list so the dates go from oldest to newest
+    cash_flow_dates.reverse()
+    cash_flow_count = len(cash_flow_dates)
 
-    # Find the number of days between coupon payments
-    coupon_period_days = 365 / frequency
+    # Pre-calculate the regular coupon amount
+    regular_coupon = (face_value * coupon_rate) / frequency
 
-    # Calculate exact number of periods by rounding off the leap-year remainder
-    total_periods = round(maturity_days / coupon_period_days)
+    # Determine the first coupon amount (checking for a true stub)
+    exact_previous_period = cash_flow_dates[0] - relativedelta(months=months_per_period)
+    
+    if issue_date == exact_previous_period:
+        # The issue date aligns perfectly with a standard coupon cycle (No stub)
+        stub_coupon = regular_coupon
+    else:
+        # It is a true stub period (short or long)
+        stub_days = (cash_flow_dates[0] - issue_date).days
+        stub_coupon = face_value * coupon_rate * (stub_days / 365.0)
 
-    # Create a list of all coupon payment dates, expressed as "days since issuance".
-    cash_flow_days = []
-    for i in range(total_periods):
-        cash_flow_days.append(maturity_days - (i * coupon_period_days))
+    # Build the full array of cash flow amounts cleanly
+    all_amounts = [stub_coupon] + [regular_coupon] * (cash_flow_count - 1)
+    
+    # Add the principal to the final payment
+    all_amounts[-1] = all_amounts[-1] + face_value
 
-    # Reverse the list, such that the first entry refers to the first cash flow
-    cash_flow_days.reverse()
 
-    # Find the total number of cash flows
-    cash_flow_count = len(cash_flow_days)
+# 3. Future Cash Flows and Exact Time Periods
 
-    cash_flow_amounts = []
-    i = 0
-
-    while i < cash_flow_count:
-        if i == 0:
-            cash_flow_stub = (face_value * coupon_rate * cash_flow_days[0]) / 365
-
-            # Edge case: check if the first cash flow is also the last
-            # If so, add the face value as well
-            if cash_flow_count == 1:
-                cash_flow_stub = cash_flow_stub + face_value
-
-            cash_flow_amounts.append(cash_flow_stub)
-
-        elif i < (cash_flow_count - 1):
-            cash_flow_other = (face_value * coupon_rate) / frequency
-            cash_flow_amounts.append(cash_flow_other)
-
-        else: 
-            cash_flow_final = face_value + ((face_value * coupon_rate) / frequency)
-            cash_flow_amounts.append(cash_flow_final)
-
-        i = i + 1
-
-# 3. Future Cash Flows from Today
-
-    # Find the number of days from issuance until today
-    today_days = (current_date - issue_date).days
-
-    # Create new lists to hold only the future cash flows
-    future_days = []
+    future_w_periods = []
     future_amounts = []
 
-    # Loop through both original lists simultaneously
-    for day, amount in zip(cash_flow_days, cash_flow_amounts):
-
-        # Only look at days strictly in the future
-        # Adjust day count to: days from today
-        if day > today_days:
-            days_from_today = day - today_days
-
-            future_days.append(days_from_today)
+    # Zip pairs the full history of dates and amounts together perfectly
+    for cf_date, amount in zip(cash_flow_dates, all_amounts):
+        
+        # Filter: We only care about cash flows happening after today
+        if cf_date > settlement_date:
+            
+            # Exact days from today until the cash flow hits
+            days_from_today = (cf_date - settlement_date).days
+            
+            # Convert days into exact fractional coupon periods (Actual/365 convention)
+            w_period = (days_from_today / 365.0) * frequency
+            
+            future_w_periods.append(w_period)
             future_amounts.append(amount)
 
     # Safety Check for Matured Bonds
-    if len(future_days) == 0:
+    if not future_w_periods:
         print("Error: This bond has already matured\n")
         continue
 
+    # Display Expected Cash Flows
+    print("\n" + "=" * 45)
+    print(" EXPECTED FUTURE CASH FLOWS")
+    print("=" * 45)
+    print(f"{'Days from Settlement':<22} | {'Amount':<20}")
+    print("-" * 45)
+
+    for w, amount in zip(future_w_periods, future_amounts):
+        # Reverse the w math to get approximate days back, rounded to nearest integer
+        display_days = round((w / frequency) * 365)
+        
+        # Format the amount to 2 decimal places
+        display_amount = f"{amount:.2f}"
+        
+        print(f"{display_days:<22} | {display_amount:<20}")
+
+    print("=" * 45 + "\n")
+
+
 # 4. Find YTM using Newton_Raphson Method
 
-    def net_present_value(days_list, cashflow_list, rate, price):
+    def net_present_value(w_periods, cashflows, rate, price):
         npv = -price
-        for day, cashflow in zip(days_list, cashflow_list):
-            npv = npv + (cashflow / ((1 + rate / frequency)**(frequency * (day / 365))))
+        for w, cf in zip(w_periods, cashflows):
+            npv = npv + cf / ((1 + rate / frequency)**w)
         return npv
 
-    def get_derivative(days_list, cashflow_list, rate):
+    def get_derivative(w_periods, cashflows, rate):
         derivative = 0
-        for day, cashflow in zip(days_list, cashflow_list):
-            derivative = derivative + -(frequency * (day / 365)) * (cashflow / frequency) / ((1 + rate / frequency)**(frequency * (day / 365) + 1))
+        for w, cf in zip(w_periods, cashflows):
+            derivative = derivative - (w * cf / frequency) / ((1 + rate / frequency)**(w + 1))
         return derivative
 
     rate = 0.02
@@ -164,8 +184,8 @@ while True:
 
     iteration = 0
     while iteration < max_iterations:
-        npv_value = net_present_value(future_days, future_amounts, rate, price)
-        derivative_value = get_derivative(future_days, future_amounts, rate)
+        npv_value = net_present_value(future_w_periods, future_amounts, rate, price)
+        derivative_value = get_derivative(future_w_periods, future_amounts, rate)
         
         new_rate = rate - (npv_value / derivative_value)
         
@@ -173,9 +193,8 @@ while True:
             break
             
         rate = new_rate
-        iteration += 1
+        iteration = iteration + 1
 
-    print(f"Converged after {iteration} iterations.")
     print(f"YTM = {rate * 100:.2f}%")
 
     print("-" * 30)
