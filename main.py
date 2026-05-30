@@ -1,18 +1,45 @@
+import pandas as pd
+from pandas.tseries.holiday import USFederalHolidayCalendar
+from pandas.tseries.offsets import CustomBusinessDay
 from datetime import date
 from dateutil.relativedelta import relativedelta
 
 # 1. Bond Parameter Input
 
-face_value = 100
-
 while True:
     while True:
         try:
-            price_input = input("(1/6) Enter Settlement Price (incl. accr. interest): ")
-            price = float(price_input)
+            price_clean_input = input("(1/6) Enter Clean Price: ")
+            price_clean = float(price_clean_input)
 
-            if price <= 0:
+            if price_clean <= 0:
                 print("Error: Market Price must be larger than 0")
+                continue
+            break
+
+        except ValueError:
+            print("Error: Invalid input")
+
+    while True:
+        try:
+            interest_input = input("(1/6) Enter Accr. Interest: ")
+            interest = float(interest_input)
+
+            if interest < 0:
+                print("Error: Accr. Interest cannot be negative")
+                continue
+            break
+
+        except ValueError:
+            print("Error: Invalid input")
+
+    while True:
+        try:
+            number_input = input("(1/6) Enter Number of Bonds: ")
+            number = float(number_input)
+
+            if number <= 1:
+                print("Error: Number of Bonds must be at least 1")
                 continue
             break
 
@@ -84,6 +111,20 @@ while True:
 
 # 2. Cash Flow Reconstruction (Dates and Amounts)
 
+    face_value = 1000 * number
+
+    # 0.10% on the first $10,000 of Face Value, 0.025% on everything above
+    if face_value <= 10000:
+        commission = face_value * 0.0010
+    else:
+        commission = (10000 * 0.0010) + ((face_value - 10000) * 0.00025)
+
+    # Apply IBKR's minimum contract/order floor of $1.00
+    commission = max(commission, 1.00)
+
+    # Total real-world capital outflow required to establish the position
+    price = price_clean + interest + commission
+
     # Calculate exactly how many months make up one coupon period
     months_per_period = int(12 / frequency)
     
@@ -125,14 +166,21 @@ while True:
     future_w_periods = []
     future_amounts = []
 
+    # Define the US Business Day calendar (skips weekends and US federal holidays)
+    us_bday = CustomBusinessDay(calendar=USFederalHolidayCalendar())
+
     # Zip pairs the full history of dates and amounts together perfectly
     for cf_date, amount in zip(cash_flow_dates, all_amounts):
         
+        # --- NEW LOGIC: Adjust theoretical date to real-world payment date ---
+        # If the date falls on a weekend or holiday, roll it to the next valid business day
+        actual_cf_date = us_bday.rollforward(pd.Timestamp(cf_date)).date()
+        
         # Filter: We only care about cash flows happening after today
-        if cf_date > settlement_date:
+        if actual_cf_date > settlement_date:
             
             # Exact days from today until the cash flow hits
-            days_from_today = (cf_date - settlement_date).days
+            days_from_today = (actual_cf_date - settlement_date).days
             
             # Convert days into exact fractional coupon periods (Actual/365 convention)
             w_period = (days_from_today / 365.0) * frequency
